@@ -1,0 +1,23 @@
+# Elastic data
+esdata/
+
+# Logs
+*.log
+nginxlogs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+
+# Claude Code
+.claude/

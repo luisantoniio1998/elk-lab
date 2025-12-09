@@ -1,0 +1,145 @@
+{
+  "description": "Parse Nginx access logs for Juice Shop with OWASP security detection",
+  "processors": [
+    {
+      "grok": {
+        "field": "message",
+        "patterns": [
+          "%{IPORHOST:client.ip} - %{DATA:user.name} \\[%{HTTPDATE:nginx.timestamp}\\] \"%{WORD:http.method} %{DATA:url.path} HTTP/%{NUMBER:http.version}\" %{NUMBER:http.response.status_code:int} %{NUMBER:http.response.body.bytes:int} \"%{DATA:http.request.referrer}\" \"%{DATA:user_agent.original}\" %{NUMBER:nginx.request_time:float} %{NUMBER:nginx.upstream_response_time:float}"
+        ],
+        "ignore_missing": true,
+        "ignore_failure": false
+      }
+    },
+    {
+      "date": {
+        "field": "nginx.timestamp",
+        "target_field": "@timestamp",
+        "formats": ["dd/MMM/yyyy:HH:mm:ss Z"],
+        "ignore_failure": true
+      }
+    },
+    {
+      "convert": {
+        "field": "http.response.status_code",
+        "type": "integer",
+        "ignore_missing": true
+      }
+    },
+    {
+      "convert": {
+        "field": "http.response.body.bytes",
+        "type": "integer",
+        "ignore_missing": true
+      }
+    },
+    {
+      "convert": {
+        "field": "nginx.request_time",
+        "type": "float",
+        "ignore_missing": true
+      }
+    },
+    {
+      "convert": {
+        "field": "nginx.upstream_response_time",
+        "type": "float",
+        "ignore_missing": true
+      }
+    },
+    {
+      "script": {
+        "description": "Detect SQL Injection patterns (OWASP A03:2021)",
+        "lang": "painless",
+        "source": "if (ctx.url?.path != null) { String url = ctx.url.path.toLowerCase(); if (url.contains('union') || url.contains('select') || url.contains('insert') || url.contains('update') || url.contains('delete') || url.contains('drop') || url.contains('--') || url.contains('or 1=1') || url.contains('or 1 = 1') || url.contains(\"'or'\")||url.contains('sleep(')) { if (ctx.security == null) { ctx.security = new HashMap(); } if (ctx.security.threats == null) { ctx.security.threats = new ArrayList(); } ctx.security.threats.add('sql_injection'); ctx.security.threat_detected = true; ctx.security.owasp_category = 'A03:2021-Injection'; } }",
+        "ignore_failure": true
+      }
+    },
+    {
+      "script": {
+        "description": "Detect XSS patterns (OWASP A03:2021)",
+        "lang": "painless",
+        "source": "if (ctx.url?.path != null) { String url = ctx.url.path.toLowerCase(); if (url.contains('<script') || url.contains('javascript:') || url.contains('onerror=') || url.contains('onload=') || url.contains('onclick=') || url.contains('<img') || url.contains('alert(') || url.contains('eval(')) { if (ctx.security == null) { ctx.security = new HashMap(); } if (ctx.security.threats == null) { ctx.security.threats = new ArrayList(); } ctx.security.threats.add('xss'); ctx.security.threat_detected = true; ctx.security.owasp_category = 'A03:2021-Injection'; } }",
+        "ignore_failure": true
+      }
+    },
+    {
+      "script": {
+        "description": "Detect Path Traversal (OWASP A01:2021)",
+        "lang": "painless",
+        "source": "if (ctx.url?.path != null) { String url = ctx.url.path; if (url.contains('../') || url.contains('..\\\\') || url.contains('%2e%2e') || url.contains('....//') || url.contains('/etc/passwd') || url.contains('/etc/shadow') || url.contains('c:\\\\windows')) { if (ctx.security == null) { ctx.security = new HashMap(); } if (ctx.security.threats == null) { ctx.security.threats = new ArrayList(); } ctx.security.threats.add('path_traversal'); ctx.security.threat_detected = true; ctx.security.owasp_category = 'A01:2021-Broken Access Control'; } }",
+        "ignore_failure": true
+      }
+    },
+    {
+      "script": {
+        "description": "Detect Command Injection (OWASP A03:2021)",
+        "lang": "painless",
+        "source": "if (ctx.url?.path != null) { String url = ctx.url.path.toLowerCase(); if (url.contains(';') || url.contains('|') || url.contains('&&') || url.contains('`') || url.contains('$(')) { if (url.contains('whoami') || url.contains('cat /') || url.contains('wget') || url.contains('curl') || url.contains('/bin/') || url.contains('bash') || url.contains('sh -c')) { if (ctx.security == null) { ctx.security = new HashMap(); } if (ctx.security.threats == null) { ctx.security.threats = new ArrayList(); } ctx.security.threats.add('command_injection'); ctx.security.threat_detected = true; ctx.security.owasp_category = 'A03:2021-Injection'; } } }",
+        "ignore_failure": true
+      }
+    },
+    {
+      "script": {
+        "description": "Detect Authentication Failures (OWASP A07:2021)",
+        "lang": "painless",
+        "source": "if (ctx.http?.response?.status_code != null) { if (ctx.http.response.status_code == 401 || ctx.http.response.status_code == 403) { if (ctx.security == null) { ctx.security = new HashMap(); } if (ctx.security.threats == null) { ctx.security.threats = new ArrayList(); } ctx.security.threats.add('auth_failure'); ctx.security.threat_detected = true; ctx.security.owasp_category = 'A07:2021-Authentication Failures'; } }",
+        "ignore_failure": true
+      }
+    },
+    {
+      "script": {
+        "description": "Detect Security Scanners",
+        "lang": "painless",
+        "source": "if (ctx.user_agent?.original != null) { String ua = ctx.user_agent.original.toLowerCase(); if (ua.contains('nikto') || ua.contains('sqlmap') || ua.contains('nmap') || ua.contains('burp') || ua.contains('zap') || ua.contains('acunetix') || ua.contains('nessus') || ua.contains('masscan') || ua.contains('dirbuster') || ua.contains('gobuster') || ua.contains('wfuzz')) { if (ctx.security == null) { ctx.security = new HashMap(); } if (ctx.security.threats == null) { ctx.security.threats = new ArrayList(); } ctx.security.threats.add('security_scanner'); ctx.security.threat_detected = true; ctx.security.scanner_type = 'automated_scanner'; } }",
+        "ignore_failure": true
+      }
+    },
+    {
+      "script": {
+        "description": "Detect Suspicious HTTP Methods",
+        "lang": "painless",
+        "source": "if (ctx.http?.method != null) { String method = ctx.http.method.toUpperCase(); if (method == 'PUT' || method == 'DELETE' || method == 'TRACE' || method == 'CONNECT' || method == 'OPTIONS') { if (ctx.security == null) { ctx.security = new HashMap(); } if (ctx.security.threats == null) { ctx.security.threats = new ArrayList(); } ctx.security.threats.add('suspicious_method'); ctx.security.threat_detected = true; } }",
+        "ignore_failure": true
+      }
+    },
+    {
+      "script": {
+        "description": "Detect Brute Force patterns (multiple requests)",
+        "lang": "painless",
+        "source": "if (ctx.url?.path != null && (ctx.url.path.contains('/login') || ctx.url.path.contains('/rest/user/login') || ctx.url.path.contains('/api/Users'))) { if (ctx.security == null) { ctx.security = new HashMap(); } ctx.security.is_login_attempt = true; if (ctx.http?.response?.status_code == 401) { ctx.security.failed_login = true; ctx.security.owasp_category = 'A07:2021-Authentication Failures'; } }",
+        "ignore_failure": true
+      }
+    },
+    {
+      "script": {
+        "description": "Detect API abuse patterns",
+        "lang": "painless",
+        "source": "if (ctx.url?.path != null && ctx.url.path.contains('/api/')) { if (ctx.security == null) { ctx.security = new HashMap(); } ctx.security.is_api_call = true; if (ctx.http?.response?.status_code >= 400 && ctx.http.response.status_code < 500) { ctx.security.api_error = true; } }",
+        "ignore_failure": true
+      }
+    },
+    {
+      "script": {
+        "description": "Calculate threat severity score",
+        "lang": "painless",
+        "source": "if (ctx.security?.threats != null && ctx.security.threats.size() > 0) { int score = 0; if (ctx.security.threats.contains('sql_injection')) score += 10; if (ctx.security.threats.contains('xss')) score += 8; if (ctx.security.threats.contains('path_traversal')) score += 9; if (ctx.security.threats.contains('command_injection')) score += 10; if (ctx.security.threats.contains('auth_failure')) score += 3; if (ctx.security.threats.contains('security_scanner')) score += 5; if (ctx.security.threats.contains('suspicious_method')) score += 2; ctx.security.severity_score = score; if (score >= 10) { ctx.security.severity = 'critical'; } else if (score >= 7) { ctx.security.severity = 'high'; } else if (score >= 4) { ctx.security.severity = 'medium'; } else { ctx.security.severity = 'low'; } }",
+        "ignore_failure": true
+      }
+    },
+    {
+      "script": {
+        "description": "Set security event flag",
+        "lang": "painless",
+        "source": "if (ctx.security?.threat_detected == true || ctx.security?.failed_login == true || ctx.http?.response?.status_code >= 400) { ctx.event_type = 'security'; } else { ctx.event_type = 'normal'; }",
+        "ignore_failure": true
+      }
+    },
+    {
+      "remove": {
+        "field": "nginx.timestamp",
+        "ignore_missing": true
+      }
+    }
+  ]
+}

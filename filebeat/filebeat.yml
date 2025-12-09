@@ -1,0 +1,44 @@
+# Simplified Filebeat Configuration - ONLY Juice Shop Nginx Logs
+
+# ================== INPUTS ==================
+
+filebeat.inputs:
+
+# Nginx Access Logs for Juice Shop HTTP Traffic
+- type: log
+  id: nginx-juice-shop-access
+  enabled: true
+  paths:
+    - /var/log/nginx/access.log
+  tags: ["juice-shop", "nginx", "http", "access"]
+  fields:
+    app_name: "juice-shop"
+    app_type: "web_application"
+    log_type: "http_access"
+  fields_under_root: true
+  pipeline: "nginx-access-parser"
+
+- type: log
+  id: nginx-juice-shop-error
+  enabled: true
+  paths:
+    - /var/log/nginx/error.log
+  tags: ["juice-shop", "nginx", "http", "error"]
+  fields:
+    app_name: "juice-shop"
+    app_type: "web_application"
+    log_type: "http_error"
+  fields_under_root: true
+  pipeline: "nginx-error-parser"
+
+# ================== OUTPUT ==================
+
+output.elasticsearch:
+  hosts: ['elasticsearch:9200']
+  username: "elastic"
+  password: "${ELASTIC_PASSWORD}"
+
+setup.kibana:
+  host: "kibana:5601"
+  username: "elastic"
+  password: "${ELASTIC_PASSWORD}"

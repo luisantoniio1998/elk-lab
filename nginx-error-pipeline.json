@@ -1,0 +1,135 @@
+{
+  "description": "Parse Nginx error logs with security detection",
+  "processors": [
+    {
+      "grok": {
+        "field": "message",
+        "patterns": [
+          "%{YEAR:year}/%{MONTHNUM:month}/%{MONTHDAY:day} %{TIME:time} \\[%{LOGLEVEL:log.level}\\] %{NUMBER:nginx.pid}#%{NUMBER:nginx.tid}: \\*%{NUMBER:nginx.connection_id} %{DATA:error.message}, client: %{IPORHOST:client.ip}, server: %{DATA:server.name}, request: \"%{WORD:http.method} %{DATA:url.path} HTTP/%{NUMBER:http.version}\", upstream: \"%{DATA:nginx.upstream}\", host: \"%{DATA:http.host}\""
+        ],
+        "ignore_missing": true,
+        "ignore_failure": false
+      }
+    },
+    {
+      "set": {
+        "description": "Combine date and time into single field",
+        "field": "nginx.timestamp",
+        "value": "{{year}}/{{month}}/{{day}} {{time}}"
+      }
+    },
+    {
+      "date": {
+        "description": "Parse timestamp into @timestamp",
+        "field": "nginx.timestamp",
+        "target_field": "@timestamp",
+        "formats": ["yyyy/MM/dd HH:mm:ss"],
+        "ignore_failure": true
+      }
+    },
+    {
+      "convert": {
+        "description": "Convert nginx.pid to integer",
+        "field": "nginx.pid",
+        "type": "integer",
+        "ignore_missing": true
+      }
+    },
+    {
+      "convert": {
+        "description": "Convert nginx.tid to integer",
+        "field": "nginx.tid",
+        "type": "integer",
+        "ignore_missing": true
+      }
+    },
+    {
+      "convert": {
+        "description": "Convert connection_id to integer",
+        "field": "nginx.connection_id",
+        "type": "integer",
+        "ignore_missing": true
+      }
+    },
+    {
+      "convert": {
+        "description": "Convert http.version to float",
+        "field": "http.version",
+        "type": "float",
+        "ignore_missing": true
+      }
+    },
+    {
+      "script": {
+        "description": "Categorize error types",
+        "lang": "painless",
+        "source": "if (ctx.error?.message != null) { String err = ctx.error.message.toLowerCase(); if (ctx.error.category == null) { ctx.error.category = new ArrayList(); } if (err.contains('upstream')) { ctx.error.category.add('upstream_error'); } if (err.contains('timeout')) { ctx.error.category.add('timeout'); } if (err.contains('connection refused')) { ctx.error.category.add('connection_refused'); } if (err.contains('permission denied')) { ctx.error.category.add('permission_denied'); } if (err.contains('forbidden')) { ctx.error.category.add('forbidden'); } }",
+        "ignore_failure": true
+      }
+    },
+    {
+      "script": {
+        "description": "Detect upstream attack indicators (SECURITY)",
+        "lang": "painless",
+        "source": "if (ctx.error?.message != null) { String err = ctx.error.message.toLowerCase(); if (ctx.security == null) { ctx.security = new HashMap(); } if (ctx.security.threats == null) { ctx.security.threats = new ArrayList(); } if (err.contains('upstream prematurely closed') || err.contains('upstream timed out') || err.contains('upstream connection failed')) { ctx.security.upstream_attack_indicator = true; ctx.security.threats.add('suspicious_upstream_error'); ctx.security.threat_detected = true; ctx.security.description = 'Backend service disruption - possible DoS or exploitation'; } }",
+        "ignore_failure": true
+      }
+    },
+    {
+      "script": {
+        "description": "Detect unauthorized access attempts (SECURITY - OWASP A01)",
+        "lang": "painless",
+        "source": "if (ctx.error?.message != null) { String err = ctx.error.message.toLowerCase(); if (ctx.security == null) { ctx.security = new HashMap(); } if (ctx.security.threats == null) { ctx.security.threats = new ArrayList(); } if (err.contains('permission denied') || err.contains('forbidden') || err.contains('access denied') || err.contains('not allowed')) { ctx.security.threats.add('unauthorized_access_attempt'); ctx.security.threat_detected = true; ctx.security.owasp_category = 'A01:2021-Broken Access Control'; ctx.security.description = 'Attempt to access restricted resources'; } }",
+        "ignore_failure": true
+      }
+    },
+    {
+      "script": {
+        "description": "Detect connection-based attacks (SECURITY)",
+        "lang": "painless",
+        "source": "if (ctx.error?.message != null) { String err = ctx.error.message.toLowerCase(); if (ctx.security == null) { ctx.security = new HashMap(); } if (ctx.security.threats == null) { ctx.security.threats = new ArrayList(); } if (err.contains('connection refused') || err.contains('connection reset') || err.contains('no route to host')) { ctx.security.threats.add('connection_based_attack'); ctx.security.threat_detected = true; ctx.security.description = 'Possible port scanning or network-level attack'; } }",
+        "ignore_failure": true
+      }
+    },
+    {
+      "script": {
+        "description": "Detect resource exhaustion indicators (SECURITY - DoS)",
+        "lang": "painless",
+        "source": "if (ctx.error?.message != null) { String err = ctx.error.message.toLowerCase(); if (ctx.security == null) { ctx.security = new HashMap(); } if (ctx.security.threats == null) { ctx.security.threats = new ArrayList(); } if (err.contains('too many') || err.contains('limit exceeded') || err.contains('resource unavailable') || err.contains('out of')) { ctx.security.threats.add('resource_exhaustion'); ctx.security.threat_detected = true; ctx.security.owasp_category = 'A04:2021-Insecure Design'; ctx.security.description = 'Possible DoS attack - resource exhaustion detected'; } }",
+        "ignore_failure": true
+      }
+    },
+    {
+      "script": {
+        "description": "Mark critical errors for investigation",
+        "lang": "painless",
+        "source": "if (ctx.log?.level != null) { String level = ctx.log.level.toLowerCase(); if (ctx.security == null) { ctx.security = new HashMap(); } if (level == 'error' || level == 'crit' || level == 'alert' || level == 'emerg') { ctx.security.is_critical_error = true; ctx.security.requires_investigation = true; ctx.event_type = 'error'; } else if (level == 'warn') { ctx.event_type = 'warning'; } else { ctx.event_type = 'info'; } }",
+        "ignore_failure": true
+      }
+    },
+    {
+      "script": {
+        "description": "Calculate error severity score (SECURITY)",
+        "lang": "painless",
+        "source": "if (ctx.security?.threats != null && ctx.security.threats.size() > 0) { int score = 0; if (ctx.security.threats.contains('resource_exhaustion')) score += 8; if (ctx.security.threats.contains('suspicious_upstream_error')) score += 7; if (ctx.security.threats.contains('unauthorized_access_attempt')) score += 6; if (ctx.security.threats.contains('connection_based_attack')) score += 5; if (ctx.security?.is_critical_error == true) score += 3; ctx.security.severity_score = score; if (score >= 10) { ctx.security.severity = 'critical'; } else if (score >= 7) { ctx.security.severity = 'high'; } else if (score >= 4) { ctx.security.severity = 'medium'; } else { ctx.security.severity = 'low'; } }",
+        "ignore_failure": true
+      }
+    },
+    {
+      "script": {
+        "description": "Set final event classification",
+        "lang": "painless",
+        "source": "if (ctx.security?.threat_detected == true) { ctx.event_type = 'security'; } else if (ctx.security?.is_critical_error == true) { ctx.event_type = 'error'; }",
+        "ignore_failure": true
+      }
+    },
+    {
+      "remove": {
+        "description": "Clean up temporary fields",
+        "field": ["year", "month", "day", "time", "nginx.timestamp"],
+        "ignore_missing": true
+      }
+    }
+  ]
+}
+ 
