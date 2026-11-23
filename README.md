@@ -1,15 +1,13 @@
 # ELK Security Lab
 
-A small lab for learning how to monitor web traffic with Elasticsearch, Kibana, and Filebeat, and spot common web attacks using OWASP Juice Shop as the target app.
-
-This is meant to be easy to run locally and easy to understand.
+I use this lab to practise collecting and parsing Nginx logs with Filebeat and Elasticsearch. OWASP Juice Shop provides the web app, and Kibana is where I inspect the events.
 
 ## What this lab does
 
 - Sends web traffic through Nginx
 - Collects server logs with Filebeat
 - Parses the logs in Elasticsearch
-- Detects common attack patterns like SQL injection, XSS, and path traversal
+- Flags requests matching patterns such as SQL injection, XSS, and path traversal
 - Lets you explore the events in Kibana
 
 ## What you need
@@ -96,9 +94,9 @@ elk-lab/
 └── .env
 ```
 
-## Examples of what it detects
+## Patterns in the pipelines
 
-This lab is designed to catch common web app issues, including:
+The pipeline rules cover these patterns in the logs:
 
 - SQL injection
 - XSS
@@ -174,6 +172,6 @@ Open an issue or submit a PR if you want to add detections, improve docs, or fix
 
 MIT
 
-## Notes
+## Lab scope
 
-This project is meant for learning and testing in a local environment. It is not a production security setup.
+This is a local learning setup. The pattern matches are examples to inspect and refine, rather than proof that an attack succeeded.
